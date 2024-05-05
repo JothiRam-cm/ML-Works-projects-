@@ -1,0 +1,257 @@
+import os
+import cv2
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+from tensorflow.keras.applications import VGG19
+from tensorflow.keras.layers import Dense, Dropout, Flatten
+from tensorflow.keras.models import Model
+from tensorflow.keras.optimizers import Adam
+from sklearn.metrics import confusion_matrix, classification_report
+import matplotlib.pyplot as plt
+
+data_dir = r"D:\PDP-lab\dataset"  # Replace with actual path
+osteoporosis_dir = os.path.join(data_dir, "osteoporosis")
+normal_dir = os.path.join(data_dir, "Normal")
+osteopenia_dir = os.path.join(data_dir, "Osteophenia")
+
+classes = ["normal", "osteopenia", "osteoporosis"]
+
+num_normal_images = len(os.listdir(normal_dir))
+num_osteopenia_images = len(os.listdir(osteopenia_dir))
+num_osteoporosis_images = len(os.listdir(osteoporosis_dir))
+
+total_images = num_normal_images + num_osteopenia_images + num_osteoporosis_images
+
+train_datagen = ImageDataGenerator(
+    rescale=1. / 255,
+    shear_range=0.2,
+    zoom_range=0.2,
+    horizontal_flip=True,
+    validation_split=0.2  # Split 20% for validation
+)
+
+test_datagen = ImageDataGenerator(rescale=1. / 255)
+
+train_generator = train_datagen.flow_from_directory(
+    data_dir,
+    target_size=(224, 224),  # Adjust if VGG19 requires different input size
+    batch_size=32,  # Adjust batch size as needed
+    class_mode="categorical",
+    subset="training"
+)
+
+validation_generator = train_datagen.flow_from_directory(
+    data_dir,
+    target_size=(224, 224),
+    batch_size=32,
+    class_mode="categorical",
+    subset="validation"
+)
+
+test_generator = test_datagen.flow_from_directory(
+    data_dir,  # Replace with path to user image if using for prediction
+    target_size=(224, 224),
+    batch_size=1,  # Single image for prediction
+    class_mode="categorical",
+    shuffle=False  # Keep images in original order for prediction
+)
+def remove_noise(image):
+    # Apply chosen noise reduction technique here
+    # Example: Median blur for salt-and-pepper noise
+    image = cv2.medianBlur(image, 5)  # Adjust kernel size as needed
+    return image
+base_model = VGG19(weights="imagenet", include_top=False, input_shape=(224, 224, 3))
+for layer in base_model.layers:
+    layer.trainable = False
+   x = base_model.output
+   x = Flatten()(x)
+   x = Dense(1024, activation="relu")(x)
+   x = Dropout(0.5)(x)
+   predictions = Dense(len(classes), activation="softmax")(x)
+
+   model = Model(inputs=base_model.input, outputs=predictions)
+
+   # Compile Model
+   model.compile(loss="categorical_crossentropy", optimizer=Adam(learning_rate=0.0001), metrics=["accuracy"])
+
+history = model.fit(
+    train_generator,
+    steps_per_epoch=train_generator.n // train_generator.batch_size,
+    epochs=20,  # Adjust based on training time and accuracy
+    validation_data=validation_generator,
+    validation_steps=validation_generator.n // validation_generator.batch_size
+)
+
+ plt.figure(figsize=(10, 6))
+
+# Plot training and validation accuracy
+plt.plot(history.history["accuracy"], label="Accuracy (Train)")
+plt.plot(history.history["val_accuracy"], label="Accuracy (Validation)")
+plt.title("Training and Validation Accuracy")
+plt.xlabel("Epoch")
+plt.ylabel("Accuracy")
+plt.legend()
+
+# Plot training and validation loss
+plt.figure(figsize=(10, 6))
+plt.plot(history.history["loss"], label="Loss (Train)")
+plt.plot(history.history["val_loss"], label="Loss (Validation)")
+plt.title("Training and Validation Loss")
+plt.xlabel("Epoch")
+plt.ylabel("Loss")
+plt.legend()
+
+plt.show()
+
+import numpy as np
+test_loss, test_acc = model.evaluate(test_generator)
+print("Test Accuracy:", test_acc)
+
+# Get predictions and labels for confusion matrix and report
+predictions = model.predict(test_generator)
+y_pred = np.argmax(predictions, axis=1)  # Get predicted class indices
+y_true = test_generator.classes  # True class labels
+
+print(classification_report(y_true, y_pred, target_names=classes))
+cm = confusion_matrix(y_true, y_pred)
+plt.matshow(cm)
+plt.title("Confusion Matrix")
+plt.xlabel("Predicted")
+plt.ylabel("True")
+plt.show()
+
+import cv2
+from skimage.restoration import inpaint_biharmonic
+
+def preprocess_image(image, mask=None, return_grayscale=False):
+    """Preprocesses an image for clarity, including label removal if applicable.
+
+    Args:
+        image: The input image as a NumPy array.
+        mask: An optional binary mask (same size as image) indicating label regions to remove.
+        return_grayscale: True to return the grayscale image, False for color (if applicable).
+
+    Returns:
+        The preprocessed image as a NumPy array (grayscale or color, depending on return_grayscale).
+    """
+
+    # Optional grayscale conversion (remove if not needed):
+    gray_image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+    # Noise reduction (choose appropriate technique):
+    blur_image = cv2.medianBlur(gray_image, 5)  # Median blur
+
+    # Label removal (if mask is provided):
+    if mask is not None:
+        try:
+            inpainted_image = inpaint_biharmonic(blur_image, mask)
+            return inpainted_image if return_grayscale else cv2.cvtColor(inpainted_image, cv2.COLOR_GRAY2BGR)
+        except ValueError as e:  # Handle potential inpainting errors
+            print("Inpainting failed:", e)
+            return blur_image if return_grayscale else cv2.cvtColor(blur_image, cv2.COLOR_GRAY2BGR)
+
+    return gray_image if return_grayscale else image  # Return grayscale or color, as requested
+
+import cv2
+# Function to resize a single image
+def resize_image(input_image_path, output_image_path, target_size):
+    # Read the input image
+    img = cv2.imread(input_image_path) 
+    # Resize the image
+    resized_img = cv2.resize(img, target_size)
+    # Save the resized image
+    cv2.imwrite(output_image_path, resized_img)
+# Specify the path to your input image
+input_image_path = r"D:\9c2tz2xfyv-1\osteoporosis\Fixed image for training CNN models\osteoporosis\1.png"
+# Specify the target size for resizing
+target_size = (224, 224)  # Set the desired size for resizing the image
+# Specify the output path for the resized image
+output_image_path = "resized_image.jpg"
+# Resize the input image
+resize_image(input_image_path, output_image_path, target_size)
+print("Resized image saved in:", output_image_path)
+# user_image_path = r"D:\PDP-lab\dataset\osteoporosis\1 (1).PNG"  # Replace with actual path
+user_image_path = output_image_path  # Replace with actual path
+user_image = cv2.imread(user_image_path)
+user_image = preprocess_image(user_image,return_grayscale=False)  # Call your preprocessing function
+print(output_image_path)
+
+# Reshape based on grayscale or color:
+if len(user_image.shape) == 2:  # Grayscale
+    user_image = user_image.reshape((1, user_image.shape[0], user_image.shape[1]))
+elif len(user_image.shape) == 3:  # Color
+    user_image = user_image.reshape((1, user_image.shape[0], user_image.shape[1], user_image.shape[2]))
+else:
+    raise ValueError("Unexpected image shape")
+
+from skimage import color
+gray_image = color.rgb2gray(user_image)
+import matplotlib.pyplot as plt
+gray_image = gray_image.squeeze()
+plt.imshow(gray_image, cmap="gray")
+plt.show()
+
+#### import numpy as np
+import tkinter as tk
+from tkinter import filedialog
+from PIL import Image, ImageTk
+import numpy as np
+
+# Reshape for prediction (single image)
+# print(user_image.shape)
+# user_image = user_image.reshape((1, user_image.shape[0], user_image.shape[1], user_image.shape[2]))  # Add only a lea
+user_image = user_image.reshape((1, 224, 224, 3))  # Add only a leading 1 for batch size
+prediction = model.predict(user_image)
+predicted_class = classes[np.argmax(prediction[0])]
+predicted_prob = np.max(prediction[0])
+
+print(f"Predicted Class: {predicted_class}")
+print(f"Predicted accuracy: {predicted_prob:.4f}")
+
+import tkinter as tk
+from tkinter import filedialog
+from PIL import Image, ImageTk
+import numpy as np
+
+def classify_image(model):  # Pass the model as an argument
+    global user_image_label
+    file_path = filedialog.askopenfilename()
+    if file_path:
+        image = Image.open(file_path)
+        image = image.resize((300, 300))  # Adjust size according to your needs
+        photo = ImageTk.PhotoImage(image)
+        user_image_label.config(image=photo)
+        user_image_label.image = photo
+        
+        # Convert image to numpy array and classify
+        user_image_array = np.array(image)
+        user_image_array = user_image_array.reshape((1,) + user_image_array.shape)  # Add batch dimension
+        prediction = model.predict(user_image_array)
+        predicted_class = classes[np.argmax(prediction[0])]
+        predicted_prob = np.max(prediction[0])
+        
+        result_label.config(text=f"Predicted Class: {predicted_class}\nPredicted Accuracy: {predicted_prob:.4f}")
+
+# Example usage:
+# Define your model and classes
+# model = ...
+# classes = [...]
+
+# Create the main Tkinter window
+root = tk.Tk()
+root.title("Image Classification")
+
+# Create a label to display user-selected image
+user_image_label = tk.Label(root)
+user_image_label.pack()
+
+# Create a button to select an image and classify
+classify_button = tk.Button(root, text="Select Image", command=lambda: classify_image(model))  # Pass model as an argument
+classify_button.pack()
+
+# Create a label to display classification result
+result_label = tk.Label(root, text="")
+result_label.pack()
+
+# Start the Tkinter event loop
+root.mainloop()
+
